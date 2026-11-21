@@ -67,8 +67,10 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
                   1. Add environment variables
                 </p>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Set <code className="font-mono text-teal-700 dark:text-teal-400">NEXT_PUBLIC_SUPABASE_URL</code> and{' '}
-                  <code className="font-mono text-teal-700 dark:text-teal-400">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in your hosting Environment Variables (or AI Studio Secrets) from Supabase Dashboard → Project Settings → API.
+                  Set <code className="font-mono text-teal-700 dark:text-teal-400">NEXT_PUBLIC_SUPABASE_URL</code> to your{' '}
+                  <span className="font-mono">https://&lt;project-ref&gt;.supabase.co</span> Project URL and{' '}
+                  <code className="font-mono text-teal-700 dark:text-teal-400">NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY</code> to your{' '}
+                  <span className="font-mono">sb_publishable_…</span> key in Secrets / Environment Variables.
                 </p>
               </div>
               <div className="p-4 space-y-1">

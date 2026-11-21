@@ -1,11 +1,16 @@
-import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
+import type { SupabaseClient, User } from '@supabase/supabase-js';
+import { createClient } from '@/utils/supabase/client';
 
 const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
-const SUPABASE_ANON_KEY = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim();
+const SUPABASE_KEY = (
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  ''
+).trim();
 
 export const isSupabaseConfigured = Boolean(
   SUPABASE_URL &&
-    SUPABASE_ANON_KEY &&
+    SUPABASE_KEY &&
     SUPABASE_URL.startsWith('https://') &&
     !SUPABASE_URL.includes('YOUR_SUPABASE')
 );
@@ -15,17 +20,11 @@ let clientInstance: SupabaseClient | null = null;
 export function getSupabaseClient(): SupabaseClient {
   if (!isSupabaseConfigured) {
     throw new Error(
-      'Supabase environment variables (NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY) are not configured yet.'
+      'Supabase environment variables (NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) are not configured yet.'
     );
   }
   if (!clientInstance) {
-    clientInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    });
+    clientInstance = createClient();
   }
   return clientInstance;
 }
