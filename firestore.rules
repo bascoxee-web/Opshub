@@ -1,0 +1,337 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Global Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+
+    // Bootstrapped Admin (verified email only — zero DB reads, immune to email spoofing)
+    function isBootstrapAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'bascoxee@gmail.com';
+    }
+
+    function isValidEmailList(listVal) {
+      return listVal is list
+        && listVal.size() >= 1
+        && listVal.size() <= 10
+        && listVal[0] is string
+        && listVal[0].size() >= 3
+        && listVal[0].size() <= 120;
+    }
+
+    function isValidStringList(listVal, maxItems) {
+      return listVal is list
+        && listVal.size() <= maxItems
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 160));
+    }
+
+    function isValidHttpsOrEmpty(url) {
+      return url is string
+        && url.size() <= 300
+        && (url == '' || url.matches('^https://.*'));
+    }
+
+    function workspaceExists(workspaceId) {
+      return exists(/databases/$(database)/documents/partner_workspaces/$(workspaceId));
+    }
+
+    function getWorkspace(workspaceId) {
+      return get(/databases/$(database)/documents/partner_workspaces/$(workspaceId));
+    }
+
+    // Master Gate: Synchronous parent workspace existence + membership check (only on get/create/update/delete, NEVER list)
+    function isWorkspaceMember(workspaceId) {
+      return workspaceExists(workspaceId)
+        && (
+          isBootstrapAdmin()
+          || request.auth.token.email in getWorkspace(workspaceId).data.authorizedEmails
+        );
+    }
+
+    // --- Entity Validation Blueprints ---
+    function isValidPartnerWorkspace(data, workspaceId) {
+      return data.keys().hasAll([
+          'id', 'name', 'ownerUid', 'ownerEmail', 'authorizedEmails', 'teamRoster', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'name', 'ownerUid', 'ownerEmail', 'authorizedEmails', 'teamRoster', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == workspaceId
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 100
+        && data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 120
+        && isValidEmailList(data.authorizedEmails)
+        && isValidStringList(data.teamRoster, 10)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPartnerAccount(data, workspaceId, accountId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'ownerUid', 'authorizedEmails', 'platform', 'category',
+          'responsibility', 'assignedOperator', 'status', 'accountHandle', 'loginEmailHint',
+          'portalUrl', 'delegatedAccessStatus', 'checklistSteps', 'completedStepIds',
+          'notes', 'lastUpdatedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'ownerUid', 'authorizedEmails', 'platform', 'category',
+          'responsibility', 'assignedOperator', 'status', 'accountHandle', 'loginEmailHint',
+          'portalUrl', 'delegatedAccessStatus', 'checklistSteps', 'completedStepIds',
+          'notes', 'lastUpdatedBy', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == accountId
+        && isValidId(data.workspaceId) && data.workspaceId == workspaceId
+        && data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && isValidEmailList(data.authorizedEmails)
+        && data.platform is string && data.platform.size() >= 2 && data.platform.size() <= 80
+        && data.category in ['social-selling', 'affiliate', 'creative-tool', 'storefront-payout']
+        && data.responsibility in ['owner-verification', 'team-managed']
+        && data.assignedOperator in ['Account Owner', 'Ops Manager', 'Content Editor', 'Shared']
+        && data.status in ['needs_owner', 'in_verification', 'connected', 'attention_needed']
+        && data.accountHandle is string && data.accountHandle.size() <= 120
+        && data.loginEmailHint is string && data.loginEmailHint.size() <= 120
+        && isValidHttpsOrEmpty(data.portalUrl)
+        && data.delegatedAccessStatus in ['not_started', 'invite_sent', 'team_access_granted', 'not_applicable']
+        && isValidStringList(data.checklistSteps, 10)
+        && isValidStringList(data.completedStepIds, 10)
+        && data.notes is string && data.notes.size() <= 1000
+        && data.lastUpdatedBy is string && data.lastUpdatedBy.size() >= 1 && data.lastUpdatedBy.size() <= 60
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVerificationRequest(data, workspaceId, requestId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'accountId', 'ownerUid', 'authorizedEmails', 'platformName',
+          'title', 'instructions', 'portalUrl', 'requestedBy', 'assignedTo',
+          'priority', 'status', 'resolutionNote', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'accountId', 'ownerUid', 'authorizedEmails', 'platformName',
+          'title', 'instructions', 'portalUrl', 'requestedBy', 'assignedTo',
+          'priority', 'status', 'resolutionNote', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == requestId
+        && isValidId(data.workspaceId) && data.workspaceId == workspaceId
+        && isValidId(data.accountId)
+        && data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && isValidEmailList(data.authorizedEmails)
+        && data.platformName is string && data.platformName.size() >= 2 && data.platformName.size() <= 80
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 140
+        && data.instructions is string && data.instructions.size() <= 1000
+        && isValidHttpsOrEmpty(data.portalUrl)
+        && data.requestedBy in ['Account Owner', 'Ops Manager', 'Content Editor']
+        && data.assignedTo in ['Account Owner', 'Ops Manager', 'Content Editor']
+        && data.priority in ['standard', 'urgent']
+        && data.status in ['pending_owner', 'in_progress', 'completed']
+        && data.resolutionNote is string && data.resolutionNote.size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidActivityLog(data, workspaceId, logId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'ownerUid', 'authorizedEmails', 'actorName',
+          'action', 'targetPlatform', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'ownerUid', 'authorizedEmails', 'actorName',
+          'action', 'targetPlatform', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == logId
+        && isValidId(data.workspaceId) && data.workspaceId == workspaceId
+        && data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && isValidEmailList(data.authorizedEmails)
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 60
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 160
+        && data.targetPlatform is string && data.targetPlatform.size() <= 80
+        && data.createdAt is timestamp;
+    }
+
+    // --- Collection: Partner Workspaces ---
+    match /partner_workspaces/{workspaceId} {
+      allow get: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && (isBootstrapAdmin() || (existing().authorizedEmails is list && request.auth.token.email in existing().authorizedEmails));
+
+      allow list: if isVerifiedUser()
+        && (isBootstrapAdmin() || (existing().authorizedEmails is list && request.auth.token.email in existing().authorizedEmails));
+
+      allow create: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && isValidPartnerWorkspace(incoming(), workspaceId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().ownerEmail == request.auth.token.email
+        && request.auth.token.email in incoming().authorizedEmails
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isBootstrapAdmin();
+
+      allow update: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && isValidPartnerWorkspace(incoming(), workspaceId)
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().ownerEmail == existing().ownerEmail
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isBootstrapAdmin()
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'authorizedEmails', 'teamRoster', 'updatedAt'])
+        );
+
+      allow delete: if isBootstrapAdmin() && isValidId(workspaceId);
+
+      // --- Subcollection: Partner Accounts (TikTok US Seller, YouTube, Canva, etc.) ---
+      match /accounts/{accountId} {
+        allow get: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(accountId)
+          && isWorkspaceMember(workspaceId);
+
+        allow list: if isVerifiedUser()
+          && (isBootstrapAdmin() || (existing().authorizedEmails is list && request.auth.token.email in existing().authorizedEmails));
+
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(accountId)
+          && isValidPartnerAccount(incoming(), workspaceId, accountId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isWorkspaceMember(workspaceId)
+          && incoming().authorizedEmails == getWorkspace(workspaceId).data.authorizedEmails;
+
+        allow update: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(accountId)
+          && isValidPartnerAccount(incoming(), workspaceId, accountId)
+          && incoming().id == existing().id
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isWorkspaceMember(workspaceId)
+          && (
+            // Action 1: Admin full account management & authorizedEmails sync
+            (isBootstrapAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+              'authorizedEmails', 'platform', 'category', 'responsibility', 'assignedOperator',
+              'status', 'accountHandle', 'loginEmailHint', 'portalUrl', 'delegatedAccessStatus',
+              'checklistSteps', 'completedStepIds', 'notes', 'lastUpdatedBy', 'updatedAt'
+            ]))
+            ||
+            // Action 2: Partner verification / connection / checklist update
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'accountHandle', 'loginEmailHint', 'portalUrl', 'delegatedAccessStatus',
+              'completedStepIds', 'notes', 'assignedOperator', 'lastUpdatedBy', 'updatedAt'
+            ])
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(accountId)
+          && isWorkspaceMember(workspaceId)
+          && (isBootstrapAdmin() || existing().ownerUid == request.auth.uid);
+      }
+
+      // --- Subcollection: Verification Requests Queue (Owner <-> Ops/Editing Team) ---
+      match /verification_requests/{requestId} {
+        allow get: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(requestId)
+          && isWorkspaceMember(workspaceId);
+
+        allow list: if isVerifiedUser()
+          && (isBootstrapAdmin() || (existing().authorizedEmails is list && request.auth.token.email in existing().authorizedEmails));
+
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(requestId)
+          && isValidVerificationRequest(incoming(), workspaceId, requestId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isWorkspaceMember(workspaceId)
+          && exists(/databases/$(database)/documents/partner_workspaces/$(workspaceId)/accounts/$(incoming().accountId))
+          && incoming().authorizedEmails == getWorkspace(workspaceId).data.authorizedEmails;
+
+        allow update: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(requestId)
+          && isValidVerificationRequest(incoming(), workspaceId, requestId)
+          && incoming().id == existing().id
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().accountId == existing().accountId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isWorkspaceMember(workspaceId)
+          && (
+            // Admin override (including re-opening terminal completed requests or syncing authorizedEmails)
+            (isBootstrapAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+              'authorizedEmails', 'title', 'instructions', 'portalUrl', 'assignedTo',
+              'priority', 'status', 'resolutionNote', 'updatedAt'
+            ]))
+            ||
+            // Partner status progression (blocked once terminal status == 'completed')
+            (existing().status != 'completed' && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'resolutionNote', 'updatedAt'
+            ]))
+          );
+
+        allow delete: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(requestId)
+          && isBootstrapAdmin();
+      }
+
+      // --- Subcollection: Append-Only Activity Logs ---
+      match /activity_logs/{logId} {
+        allow get: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(logId)
+          && isWorkspaceMember(workspaceId);
+
+        allow list: if isVerifiedUser()
+          && (isBootstrapAdmin() || (existing().authorizedEmails is list && request.auth.token.email in existing().authorizedEmails));
+
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(logId)
+          && isValidActivityLog(incoming(), workspaceId, logId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && isWorkspaceMember(workspaceId)
+          && incoming().authorizedEmails == getWorkspace(workspaceId).data.authorizedEmails;
+
+        allow update: if false;
+        allow delete: if isBootstrapAdmin() && isValidId(workspaceId) && isValidId(logId);
+      }
+    }
+  }
+}

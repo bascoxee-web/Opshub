@@ -1,0 +1,351 @@
+{
+  "entities": {
+    "PartnerWorkspace": {
+      "title": "PartnerWorkspace",
+      "description": "Shared team subscription workspace for coordinating social selling verification, delegated account access, creative editing, and content publishing.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "minLength": 2
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 120
+        },
+        "authorizedEmails": {
+          "type": "array",
+          "description": "Bounded list of up to 10 verified team member emails allowed into this workspace."
+        },
+        "teamRoster": {
+          "type": "array",
+          "description": "Bounded list of up to 10 display seat entries for the workspace team."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "ownerUid",
+        "ownerEmail",
+        "authorizedEmails",
+        "teamRoster",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PartnerAccount": {
+      "title": "PartnerAccount",
+      "description": "A social commerce, affiliate, storefront, or creative editing tool tracked in the workspace, separated into Owner-verification vs Team-managed lanes.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "authorizedEmails": {
+          "type": "array",
+          "description": "Bounded list of up to 10 authorized team member emails for secure list queries."
+        },
+        "platform": {
+          "type": "string",
+          "maxLength": 80,
+          "minLength": 2
+        },
+        "category": {
+          "type": "string",
+          "enum": ["social-selling", "affiliate", "creative-tool", "storefront-payout"]
+        },
+        "responsibility": {
+          "type": "string",
+          "enum": ["owner-verification", "team-managed"]
+        },
+        "assignedOperator": {
+          "type": "string",
+          "enum": ["Account Owner", "Ops Manager", "Content Editor", "Shared"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["needs_owner", "in_verification", "connected", "attention_needed"]
+        },
+        "accountHandle": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "loginEmailHint": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "portalUrl": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^(https://.*|)$"
+        },
+        "delegatedAccessStatus": {
+          "type": "string",
+          "enum": ["not_started", "invite_sent", "team_access_granted", "not_applicable"]
+        },
+        "checklistSteps": {
+          "type": "array",
+          "description": "Bounded list of up to 10 onboarding/verification checklist step labels."
+        },
+        "completedStepIds": {
+          "type": "array",
+          "description": "Bounded list of up to 10 completed checklist step indices/keys."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "lastUpdatedBy": {
+          "type": "string",
+          "maxLength": 60,
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "ownerUid",
+        "authorizedEmails",
+        "platform",
+        "category",
+        "responsibility",
+        "assignedOperator",
+        "status",
+        "accountHandle",
+        "loginEmailHint",
+        "portalUrl",
+        "delegatedAccessStatus",
+        "checklistSteps",
+        "completedStepIds",
+        "notes",
+        "lastUpdatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VerificationRequest": {
+      "title": "VerificationRequest",
+      "description": "Action ticket sent between team managers/editors and the Account Owner when a platform needs US seller verification, 2FA approval, tax setup, or sub-account manager invitation.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "accountId": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "authorizedEmails": {
+          "type": "array",
+          "description": "Bounded list of up to 10 authorized team member emails for secure list queries."
+        },
+        "platformName": {
+          "type": "string",
+          "maxLength": 80,
+          "minLength": 2
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 140,
+          "minLength": 3
+        },
+        "instructions": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "portalUrl": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^(https://.*|)$"
+        },
+        "requestedBy": {
+          "type": "string",
+          "enum": ["Account Owner", "Ops Manager", "Content Editor"]
+        },
+        "assignedTo": {
+          "type": "string",
+          "enum": ["Account Owner", "Ops Manager", "Content Editor"]
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["standard", "urgent"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending_owner", "in_progress", "completed"]
+        },
+        "resolutionNote": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "accountId",
+        "ownerUid",
+        "authorizedEmails",
+        "platformName",
+        "title",
+        "instructions",
+        "portalUrl",
+        "requestedBy",
+        "assignedTo",
+        "priority",
+        "status",
+        "resolutionNote",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PartnerActivityLog": {
+      "title": "PartnerActivityLog",
+      "description": "Append-only audit trail recording connection updates, checklist progress, and verification approvals across the workspace team.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 2,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "authorizedEmails": {
+          "type": "array",
+          "description": "Bounded list of up to 10 authorized team member emails for secure list queries."
+        },
+        "actorName": {
+          "type": "string",
+          "maxLength": 60,
+          "minLength": 1
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 160,
+          "minLength": 2
+        },
+        "targetPlatform": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "ownerUid",
+        "authorizedEmails",
+        "actorName",
+        "action",
+        "targetPlatform",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/partner_workspaces/{workspaceId}": {
+      "schema": {
+        "$ref": "#/entities/PartnerWorkspace"
+      },
+      "description": "Root workspace document storing authorized team member emails and seat roster."
+    },
+    "/partner_workspaces/{workspaceId}/accounts/{accountId}": {
+      "schema": {
+        "$ref": "#/entities/PartnerAccount"
+      },
+      "description": "Connected social selling, affiliate, and creative editing accounts inside a team workspace."
+    },
+    "/partner_workspaces/{workspaceId}/verification_requests/{requestId}": {
+      "schema": {
+        "$ref": "#/entities/VerificationRequest"
+      },
+      "description": "Verification and access-handoff requests assigned between the Account Owner and the team."
+    },
+    "/partner_workspaces/{workspaceId}/activity_logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/PartnerActivityLog"
+      },
+      "description": "Append-only workspace activity log entries."
+    }
+  }
+}

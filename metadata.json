@@ -1,0 +1,6 @@
+{
+  "name": "GateDesk",
+  "description": "Subscription web app for self-storage facility owners with missed-call recovery, help requests, referral tracking, and branded Tenant App. Powered by Retch VisionAI Solution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
