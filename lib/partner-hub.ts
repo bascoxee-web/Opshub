@@ -1,20 +1,5 @@
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch,
-  Unsubscribe,
-} from 'firebase/firestore';
-import { User } from 'firebase/auth';
-import { db, handleFirestoreError, OperationType } from '@/lib/firebase';
+import { User } from '@supabase/supabase-js';
+import { getSupabaseClient } from '@/lib/supabase';
 import {
   AccountAssignedOperator,
   AccountCategory,
@@ -31,9 +16,8 @@ import {
 } from '@/types/partner-hub';
 
 export const PARTNER_WORKSPACE_ID = 'creatordesk-workspace';
-export const BOOTSTRAP_ADMIN_EMAIL = 'bascoxee@gmail.com';
 
-// Volumetric constraints matching firebase-blueprint.json verbatim
+// Volumetric constraints matching supabase/schema.sql CHECK constraints
 export const LIMITS = {
   ID_MAX: 64,
   WORKSPACE_NAME_MAX: 100,
@@ -87,7 +71,8 @@ export function sanitizeStringArray(items: string[], maxItems = LIMITS.ARRAY_MAX
     .slice(0, maxItems);
 }
 
-export function sanitizeEmailList(emails: string[]): string[] {
+export function sanitizeEmailList(emails: string[], ownerEmail: string): string[] {
+  const normalizedOwner = ownerEmail.trim().toLowerCase().slice(0, LIMITS.EMAIL_MAX);
   const unique = Array.from(
     new Set(
       emails
@@ -96,36 +81,159 @@ export function sanitizeEmailList(emails: string[]): string[] {
     )
   ).slice(0, LIMITS.ARRAY_MAX);
 
-  if (!unique.includes(BOOTSTRAP_ADMIN_EMAIL)) {
-    unique.unshift(BOOTSTRAP_ADMIN_EMAIL);
+  if (normalizedOwner && !unique.includes(normalizedOwner)) {
+    unique.unshift(normalizedOwner);
   }
   return unique.slice(0, LIMITS.ARRAY_MAX);
 }
 
-export function isBootstrapAdminEmail(email?: string | null): boolean {
-  return (email || '').trim().toLowerCase() === BOOTSTRAP_ADMIN_EMAIL;
-}
-
-export function formatFirestoreTimestamp(ts: unknown): string {
+export function formatWorkspaceTimestamp(ts: unknown): string {
   if (!ts) return 'Just now';
-  if (typeof ts === 'object' && ts !== null && 'toDate' in ts && typeof (ts as { toDate: () => Date }).toDate === 'function') {
-    const d = (ts as { toDate: () => Date }).toDate();
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  }
   if (typeof ts === 'string') {
     const d = new Date(ts);
     if (!Number.isNaN(d.getTime())) {
-      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      return d.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
     }
   }
   return 'Just now';
 }
 
-export function getTimestampMillis(ts: unknown): number {
-  if (typeof ts === 'object' && ts !== null && 'toMillis' in ts && typeof (ts as { toMillis: () => number }).toMillis === 'function') {
-    return (ts as { toMillis: () => number }).toMillis();
-  }
-  return 0;
+// --- Row Mappers (snake_case Postgres <-> camelCase TypeScript) ---
+
+interface WorkspaceRow {
+  id: string;
+  name: string;
+  owner_uid: string;
+  owner_email: string;
+  authorized_emails: string[];
+  team_roster: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface AccountRow {
+  id: string;
+  workspace_id: string;
+  owner_uid: string;
+  platform: string;
+  category: AccountCategory;
+  responsibility: AccountResponsibility;
+  assigned_operator: AccountAssignedOperator;
+  status: AccountStatus;
+  account_handle: string;
+  login_email_hint: string;
+  portal_url: string;
+  delegated_access_status: DelegatedAccessStatus;
+  checklist_steps: string[];
+  completed_step_ids: string[];
+  notes: string;
+  last_updated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RequestRow {
+  id: string;
+  workspace_id: string;
+  account_id: string;
+  owner_uid: string;
+  platform_name: string;
+  title: string;
+  instructions: string;
+  portal_url: string;
+  requested_by: PartnerOperator;
+  assigned_to: PartnerOperator;
+  priority: VerificationRequestPriority;
+  status: VerificationRequestStatus;
+  resolution_note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ActivityLogRow {
+  id: string;
+  workspace_id: string;
+  owner_uid: string;
+  actor_name: string;
+  action: string;
+  target_platform: string;
+  created_at: string;
+}
+
+function mapWorkspace(row: WorkspaceRow): PartnerWorkspace {
+  return {
+    id: row.id,
+    name: row.name,
+    ownerUid: row.owner_uid,
+    ownerEmail: row.owner_email,
+    authorizedEmails: row.authorized_emails || [],
+    teamRoster: row.team_roster || [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapAccount(row: AccountRow, authorizedEmails: string[]): PartnerAccount {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    ownerUid: row.owner_uid,
+    authorizedEmails,
+    platform: row.platform,
+    category: row.category,
+    responsibility: row.responsibility,
+    assignedOperator: row.assigned_operator,
+    status: row.status,
+    accountHandle: row.account_handle || '',
+    loginEmailHint: row.login_email_hint || '',
+    portalUrl: row.portal_url || '',
+    delegatedAccessStatus: row.delegated_access_status,
+    checklistSteps: row.checklist_steps || [],
+    completedStepIds: row.completed_step_ids || [],
+    notes: row.notes || '',
+    lastUpdatedBy: row.last_updated_by || 'Team Member',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapRequest(row: RequestRow, authorizedEmails: string[]): VerificationRequest {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    accountId: row.account_id,
+    ownerUid: row.owner_uid,
+    authorizedEmails,
+    platformName: row.platform_name,
+    title: row.title,
+    instructions: row.instructions || '',
+    portalUrl: row.portal_url || '',
+    requestedBy: row.requested_by,
+    assignedTo: row.assigned_to,
+    priority: row.priority,
+    status: row.status,
+    resolutionNote: row.resolution_note || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapLog(row: ActivityLogRow, authorizedEmails: string[]): PartnerActivityLog {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    ownerUid: row.owner_uid,
+    authorizedEmails,
+    actorName: row.actor_name,
+    action: row.action,
+    targetPlatform: row.target_platform || '',
+    createdAt: row.created_at,
+  };
 }
 
 export interface PlatformPreset {
@@ -282,186 +390,181 @@ export const PLATFORM_PRESETS: PlatformPreset[] = [
   },
 ];
 
+// --- Workspace Boot & Queries ---
+
 export async function ensureWorkspaceInitialized(user: User): Promise<PartnerWorkspace | null> {
-  const workspacePath = `partner_workspaces/${PARTNER_WORKSPACE_ID}`;
-  const workspaceRef = doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID);
+  const supabase = getSupabaseClient();
+  const normalizedEmail = (user.email || '').trim().toLowerCase();
+  if (!normalizedEmail) return null;
 
-  try {
-    const snap = await getDoc(workspaceRef);
-    if (snap.exists()) {
-      return snap.data() as PartnerWorkspace;
+  // 1. Check if this user already has access to the workspace (via RLS SELECT)
+  const { data: existing, error: selectErr } = await supabase
+    .from('partner_workspaces')
+    .select('*')
+    .eq('id', PARTNER_WORKSPACE_ID)
+    .maybeSingle();
+
+  if (selectErr) {
+    throw new Error(selectErr.message);
+  }
+
+  if (existing) {
+    return mapWorkspace(existing as WorkspaceRow);
+  }
+
+  // 2. Attempt first-time workspace creation.
+  // If another admin already initialized it, Postgres primary key / RLS rejects insert safely.
+  const { data: created, error: insertErr } = await supabase
+    .from('partner_workspaces')
+    .insert({
+      id: PARTNER_WORKSPACE_ID,
+      name: 'CreatorDesk Pro Workspace',
+      owner_uid: user.id,
+      owner_email: normalizedEmail,
+      authorized_emails: [normalizedEmail],
+      team_roster: [
+        'Account Owner · US Verification & Subscriber',
+        'Ops Manager · Account Access & Admin',
+        'Content Editor · Editing & Posting',
+      ],
+    })
+    .select('*')
+    .single();
+
+  if (insertErr) {
+    // 23505 = workspace already exists and this user isn't in authorized_emails
+    if (insertErr.code === '23505' || insertErr.message.toLowerCase().includes('duplicate')) {
+      return null;
     }
-  } catch (err) {
-    if (!isBootstrapAdminEmail(user.email)) {
-      handleFirestoreError(err, OperationType.GET, workspacePath);
-    }
+    throw new Error(insertErr.message);
   }
 
-  // Only the bootstrap admin can initialize the clean workspace on first visit
-  if (!isBootstrapAdminEmail(user.email)) {
-    return null;
-  }
-
-  const authorizedEmails = [BOOTSTRAP_ADMIN_EMAIL];
-  const workspacePayload = {
-    id: PARTNER_WORKSPACE_ID,
-    name: 'CreatorDesk Pro Workspace',
-    ownerUid: user.uid,
-    ownerEmail: BOOTSTRAP_ADMIN_EMAIL,
-    authorizedEmails,
-    teamRoster: [
-      'Account Owner · US Verification & Subscriber',
-      'Ops Manager · Account Access & Admin',
-      'Content Editor · Editing & Posting',
-    ],
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
-
-  try {
-    await setDoc(workspaceRef, workspacePayload);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, workspacePath);
-  }
-
-  const finalSnap = await getDoc(workspaceRef);
-  return finalSnap.exists() ? (finalSnap.data() as PartnerWorkspace) : null;
+  return mapWorkspace(created as WorkspaceRow);
 }
 
-export function subscribePartnerHub(
-  userEmail: string,
-  callbacks: {
-    onWorkspace: (ws: PartnerWorkspace | null) => void;
-    onAccounts: (accounts: PartnerAccount[]) => void;
-    onRequests: (requests: VerificationRequest[]) => void;
-    onLogs: (logs: PartnerActivityLog[]) => void;
-    onError: (err: Error) => void;
-  }
-): Unsubscribe {
-  const normalizedEmail = userEmail.trim().toLowerCase();
-  const isAdmin = isBootstrapAdminEmail(normalizedEmail);
-  const wsPath = `partner_workspaces/${PARTNER_WORKSPACE_ID}`;
+export async function fetchPartnerHubSnapshot(workspaceId: string): Promise<{
+  workspace: PartnerWorkspace | null;
+  accounts: PartnerAccount[];
+  requests: VerificationRequest[];
+  logs: PartnerActivityLog[];
+}> {
+  const supabase = getSupabaseClient();
 
-  const unsubWorkspace = onSnapshot(
-    doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID),
-    (snap) => {
-      callbacks.onWorkspace(snap.exists() ? (snap.data() as PartnerWorkspace) : null);
-    },
-    (err) => {
-      try {
-        handleFirestoreError(err, OperationType.GET, wsPath);
-      } catch (e) {
-        callbacks.onError(e as Error);
-      }
+  const [wsRes, accRes, reqRes, logRes] = await Promise.all([
+    supabase.from('partner_workspaces').select('*').eq('id', workspaceId).maybeSingle(),
+    supabase
+      .from('partner_accounts')
+      .select('*')
+      .eq('workspace_id', workspaceId)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('verification_requests')
+      .select('*')
+      .eq('workspace_id', workspaceId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('partner_activity_logs')
+      .select('*')
+      .eq('workspace_id', workspaceId)
+      .order('created_at', { ascending: false })
+      .limit(30),
+  ]);
+
+  if (wsRes.error) throw new Error(wsRes.error.message);
+  if (accRes.error) throw new Error(accRes.error.message);
+  if (reqRes.error) throw new Error(reqRes.error.message);
+  if (logRes.error) throw new Error(logRes.error.message);
+
+  const workspace = wsRes.data ? mapWorkspace(wsRes.data as WorkspaceRow) : null;
+  const authEmails = workspace?.authorizedEmails || [];
+
+  return {
+    workspace,
+    accounts: ((accRes.data || []) as AccountRow[]).map((r) => mapAccount(r, authEmails)),
+    requests: ((reqRes.data || []) as RequestRow[]).map((r) => mapRequest(r, authEmails)),
+    logs: ((logRes.data || []) as ActivityLogRow[]).map((r) => mapLog(r, authEmails)),
+  };
+}
+
+export function subscribePartnerHub(callbacks: {
+  onWorkspace: (ws: PartnerWorkspace | null) => void;
+  onAccounts: (accounts: PartnerAccount[]) => void;
+  onRequests: (requests: VerificationRequest[]) => void;
+  onLogs: (logs: PartnerActivityLog[]) => void;
+  onError: (err: Error) => void;
+}): () => void {
+  const supabase = getSupabaseClient();
+  let active = true;
+
+  const refresh = async () => {
+    try {
+      const snap = await fetchPartnerHubSnapshot(PARTNER_WORKSPACE_ID);
+      if (!active) return;
+      callbacks.onWorkspace(snap.workspace);
+      callbacks.onAccounts(snap.accounts);
+      callbacks.onRequests(snap.requests);
+      callbacks.onLogs(snap.logs);
+    } catch (err) {
+      if (!active) return;
+      callbacks.onError(err instanceof Error ? err : new Error(String(err)));
     }
-  );
+  };
 
-  const accountsCol = collection(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'accounts');
-  const accountsQuery = isAdmin
-    ? query(accountsCol)
-    : query(accountsCol, where('authorizedEmails', 'array-contains', normalizedEmail));
+  void refresh();
 
-  const unsubAccounts = onSnapshot(
-    accountsQuery,
-    (snap) => {
-      const list = snap.docs.map((d) => d.data() as PartnerAccount);
-      callbacks.onAccounts(list);
-    },
-    (err) => {
-      try {
-        handleFirestoreError(err, OperationType.LIST, `${wsPath}/accounts`);
-      } catch (e) {
-        callbacks.onError(e as Error);
-      }
-    }
-  );
-
-  const requestsCol = collection(
-    db,
-    'partner_workspaces',
-    PARTNER_WORKSPACE_ID,
-    'verification_requests'
-  );
-  const requestsQuery = isAdmin
-    ? query(requestsCol)
-    : query(requestsCol, where('authorizedEmails', 'array-contains', normalizedEmail));
-
-  const unsubRequests = onSnapshot(
-    requestsQuery,
-    (snap) => {
-      const list = snap.docs
-        .map((d) => d.data() as VerificationRequest)
-        .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt));
-      callbacks.onRequests(list);
-    },
-    (err) => {
-      try {
-        handleFirestoreError(err, OperationType.LIST, `${wsPath}/verification_requests`);
-      } catch (e) {
-        callbacks.onError(e as Error);
-      }
-    }
-  );
-
-  const logsCol = collection(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'activity_logs');
-  const logsQuery = isAdmin
-    ? query(logsCol)
-    : query(logsCol, where('authorizedEmails', 'array-contains', normalizedEmail));
-
-  const unsubLogs = onSnapshot(
-    logsQuery,
-    (snap) => {
-      const list = snap.docs
-        .map((d) => d.data() as PartnerActivityLog)
-        .sort((a, b) => getTimestampMillis(b.createdAt) - getTimestampMillis(a.createdAt))
-        .slice(0, 30);
-      callbacks.onLogs(list);
-    },
-    (err) => {
-      try {
-        handleFirestoreError(err, OperationType.LIST, `${wsPath}/activity_logs`);
-      } catch (e) {
-        callbacks.onError(e as Error);
-      }
-    }
-  );
+  const channel = supabase
+    .channel(`workspace-${PARTNER_WORKSPACE_ID}-${Date.now()}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'partner_workspaces', filter: `id=eq.${PARTNER_WORKSPACE_ID}` },
+      () => void refresh()
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'partner_accounts', filter: `workspace_id=eq.${PARTNER_WORKSPACE_ID}` },
+      () => void refresh()
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'verification_requests', filter: `workspace_id=eq.${PARTNER_WORKSPACE_ID}` },
+      () => void refresh()
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'partner_activity_logs', filter: `workspace_id=eq.${PARTNER_WORKSPACE_ID}` },
+      () => void refresh()
+    )
+    .subscribe();
 
   return () => {
-    unsubWorkspace();
-    unsubAccounts();
-    unsubRequests();
-    unsubLogs();
+    active = false;
+    void supabase.removeChannel(channel);
   };
 }
+
+// --- Mutations ---
 
 export async function logPartnerActivity(params: {
   ownerUid: string;
-  authorizedEmails: string[];
   actorName: string;
   action: string;
   targetPlatform: string;
 }): Promise<void> {
+  const supabase = getSupabaseClient();
   const logId = createPartnerDocId('log');
-  const path = `partner_workspaces/${PARTNER_WORKSPACE_ID}/activity_logs/${logId}`;
-  try {
-    await setDoc(doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'activity_logs', logId), {
-      id: logId,
-      workspaceId: PARTNER_WORKSPACE_ID,
-      ownerUid: params.ownerUid,
-      authorizedEmails: params.authorizedEmails,
-      actorName: sanitizeString(params.actorName, LIMITS.ACTOR_MAX) || 'Team Member',
-      action: sanitizeString(params.action, LIMITS.ACTION_MAX),
-      targetPlatform: sanitizeString(params.targetPlatform, LIMITS.PLATFORM_MAX),
-      createdAt: serverTimestamp(),
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
-  }
+  const { error } = await supabase.from('partner_activity_logs').insert({
+    id: logId,
+    workspace_id: PARTNER_WORKSPACE_ID,
+    owner_uid: params.ownerUid,
+    actor_name: sanitizeString(params.actorName, LIMITS.ACTOR_MAX) || 'Team Member',
+    action: sanitizeString(params.action, LIMITS.ACTION_MAX),
+    target_platform: sanitizeString(params.targetPlatform, LIMITS.PLATFORM_MAX),
+  });
+  if (error) throw new Error(error.message);
 }
 
 export async function createPartnerAccount(params: {
   ownerUid: string;
-  authorizedEmails: string[];
   platform: string;
   category: AccountCategory;
   responsibility: AccountResponsibility;
@@ -475,43 +578,37 @@ export async function createPartnerAccount(params: {
   notes: string;
   actorName: string;
 }): Promise<void> {
+  const supabase = getSupabaseClient();
   const accountId = createPartnerDocId('acc');
-  const path = `partner_workspaces/${PARTNER_WORKSPACE_ID}/accounts/${accountId}`;
   const cleanPlatform = sanitizeString(params.platform, LIMITS.PLATFORM_MAX);
 
-  try {
-    await setDoc(doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'accounts', accountId), {
-      id: accountId,
-      workspaceId: PARTNER_WORKSPACE_ID,
-      ownerUid: params.ownerUid,
-      authorizedEmails: params.authorizedEmails,
-      platform: cleanPlatform,
-      category: params.category,
-      responsibility: params.responsibility,
-      assignedOperator: params.assignedOperator,
-      status: params.status,
-      accountHandle: sanitizeString(params.accountHandle, LIMITS.HANDLE_MAX),
-      loginEmailHint: sanitizeString(params.loginEmailHint, LIMITS.EMAIL_MAX),
-      portalUrl: sanitizeHttpsUrl(params.portalUrl),
-      delegatedAccessStatus: params.delegatedAccessStatus,
-      checklistSteps: sanitizeStringArray(params.checklistSteps, LIMITS.ARRAY_MAX),
-      completedStepIds: [],
-      notes: sanitizeString(params.notes, LIMITS.NOTES_MAX),
-      lastUpdatedBy: sanitizeString(params.actorName, LIMITS.ACTOR_MAX) || 'Team Member',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+  const { error } = await supabase.from('partner_accounts').insert({
+    id: accountId,
+    workspace_id: PARTNER_WORKSPACE_ID,
+    owner_uid: params.ownerUid,
+    platform: cleanPlatform,
+    category: params.category,
+    responsibility: params.responsibility,
+    assigned_operator: params.assignedOperator,
+    status: params.status,
+    account_handle: sanitizeString(params.accountHandle, LIMITS.HANDLE_MAX),
+    login_email_hint: sanitizeString(params.loginEmailHint, LIMITS.EMAIL_MAX),
+    portal_url: sanitizeHttpsUrl(params.portalUrl),
+    delegated_access_status: params.delegatedAccessStatus,
+    checklist_steps: sanitizeStringArray(params.checklistSteps, LIMITS.ARRAY_MAX),
+    completed_step_ids: [],
+    notes: sanitizeString(params.notes, LIMITS.NOTES_MAX),
+    last_updated_by: sanitizeString(params.actorName, LIMITS.ACTOR_MAX) || 'Team Member',
+  });
 
-    await logPartnerActivity({
-      ownerUid: params.ownerUid,
-      authorizedEmails: params.authorizedEmails,
-      actorName: params.actorName,
-      action: `Added ${cleanPlatform} (${params.responsibility === 'owner-verification' ? 'Owner Verification' : 'Team Managed'})`,
-      targetPlatform: cleanPlatform,
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
-  }
+  if (error) throw new Error(error.message);
+
+  await logPartnerActivity({
+    ownerUid: params.ownerUid,
+    actorName: params.actorName,
+    action: `Added ${cleanPlatform} (${params.responsibility === 'owner-verification' ? 'Owner Verification' : 'Team Managed'})`,
+    targetPlatform: cleanPlatform,
+  });
 }
 
 export async function updatePartnerAccount(
@@ -530,48 +627,50 @@ export async function updatePartnerAccount(
   ownerUid: string,
   activitySummary?: string
 ): Promise<void> {
-  const path = `partner_workspaces/${PARTNER_WORKSPACE_ID}/accounts/${account.id}`;
+  const supabase = getSupabaseClient();
   const payload: Record<string, unknown> = {
-    lastUpdatedBy: sanitizeString(actorName, LIMITS.ACTOR_MAX) || 'Team Member',
-    updatedAt: serverTimestamp(),
+    last_updated_by: sanitizeString(actorName, LIMITS.ACTOR_MAX) || 'Team Member',
+    updated_at: new Date().toISOString(),
   };
 
   if (updates.status !== undefined) payload.status = updates.status;
   if (updates.accountHandle !== undefined) {
-    payload.accountHandle = sanitizeString(updates.accountHandle, LIMITS.HANDLE_MAX);
+    payload.account_handle = sanitizeString(updates.accountHandle, LIMITS.HANDLE_MAX);
   }
   if (updates.loginEmailHint !== undefined) {
-    payload.loginEmailHint = sanitizeString(updates.loginEmailHint, LIMITS.EMAIL_MAX);
+    payload.login_email_hint = sanitizeString(updates.loginEmailHint, LIMITS.EMAIL_MAX);
   }
   if (updates.portalUrl !== undefined) {
-    payload.portalUrl = sanitizeHttpsUrl(updates.portalUrl);
+    payload.portal_url = sanitizeHttpsUrl(updates.portalUrl);
   }
   if (updates.delegatedAccessStatus !== undefined) {
-    payload.delegatedAccessStatus = updates.delegatedAccessStatus;
+    payload.delegated_access_status = updates.delegatedAccessStatus;
   }
   if (updates.completedStepIds !== undefined) {
-    payload.completedStepIds = sanitizeStringArray(updates.completedStepIds, LIMITS.ARRAY_MAX);
+    payload.completed_step_ids = sanitizeStringArray(updates.completedStepIds, LIMITS.ARRAY_MAX);
   }
   if (updates.notes !== undefined) {
     payload.notes = sanitizeString(updates.notes, LIMITS.NOTES_MAX);
   }
   if (updates.assignedOperator !== undefined) {
-    payload.assignedOperator = updates.assignedOperator;
+    payload.assigned_operator = updates.assignedOperator;
   }
 
-  try {
-    await updateDoc(doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'accounts', account.id), payload);
-    if (activitySummary) {
-      await logPartnerActivity({
-        ownerUid,
-        authorizedEmails: account.authorizedEmails,
-        actorName,
-        action: activitySummary,
-        targetPlatform: account.platform,
-      });
-    }
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, path);
+  const { error } = await supabase
+    .from('partner_accounts')
+    .update(payload)
+    .eq('id', account.id)
+    .eq('workspace_id', PARTNER_WORKSPACE_ID);
+
+  if (error) throw new Error(error.message);
+
+  if (activitySummary) {
+    await logPartnerActivity({
+      ownerUid,
+      actorName,
+      action: activitySummary,
+      targetPlatform: account.platform,
+    });
   }
 }
 
@@ -580,24 +679,25 @@ export async function deletePartnerAccount(
   actorName: string,
   ownerUid: string
 ): Promise<void> {
-  const path = `partner_workspaces/${PARTNER_WORKSPACE_ID}/accounts/${account.id}`;
-  try {
-    await deleteDoc(doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'accounts', account.id));
-    await logPartnerActivity({
-      ownerUid,
-      authorizedEmails: account.authorizedEmails,
-      actorName,
-      action: `Removed ${account.platform} from workspace`,
-      targetPlatform: account.platform,
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
-  }
+  const supabase = getSupabaseClient();
+  const { error } = await supabase
+    .from('partner_accounts')
+    .delete()
+    .eq('id', account.id)
+    .eq('workspace_id', PARTNER_WORKSPACE_ID);
+
+  if (error) throw new Error(error.message);
+
+  await logPartnerActivity({
+    ownerUid,
+    actorName,
+    action: `Removed ${account.platform} from workspace`,
+    targetPlatform: account.platform,
+  });
 }
 
 export async function createVerificationRequest(params: {
   ownerUid: string;
-  authorizedEmails: string[];
   account: PartnerAccount;
   title: string;
   instructions: string;
@@ -606,42 +706,33 @@ export async function createVerificationRequest(params: {
   priority: VerificationRequestPriority;
   actorName: string;
 }): Promise<void> {
+  const supabase = getSupabaseClient();
   const reqId = createPartnerDocId('req');
-  const path = `partner_workspaces/${PARTNER_WORKSPACE_ID}/verification_requests/${reqId}`;
 
-  try {
-    await setDoc(
-      doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'verification_requests', reqId),
-      {
-        id: reqId,
-        workspaceId: PARTNER_WORKSPACE_ID,
-        accountId: params.account.id,
-        ownerUid: params.ownerUid,
-        authorizedEmails: params.authorizedEmails,
-        platformName: sanitizeString(params.account.platform, LIMITS.PLATFORM_MAX),
-        title: sanitizeString(params.title, LIMITS.TITLE_MAX),
-        instructions: sanitizeString(params.instructions, LIMITS.INSTRUCTIONS_MAX),
-        portalUrl: sanitizeHttpsUrl(params.account.portalUrl),
-        requestedBy: params.requestedBy,
-        assignedTo: params.assignedTo,
-        priority: params.priority,
-        status: 'pending_owner' as VerificationRequestStatus,
-        resolutionNote: '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }
-    );
+  const { error } = await supabase.from('verification_requests').insert({
+    id: reqId,
+    workspace_id: PARTNER_WORKSPACE_ID,
+    account_id: params.account.id,
+    owner_uid: params.ownerUid,
+    platform_name: sanitizeString(params.account.platform, LIMITS.PLATFORM_MAX),
+    title: sanitizeString(params.title, LIMITS.TITLE_MAX),
+    instructions: sanitizeString(params.instructions, LIMITS.INSTRUCTIONS_MAX),
+    portal_url: sanitizeHttpsUrl(params.account.portalUrl),
+    requested_by: params.requestedBy,
+    assigned_to: params.assignedTo,
+    priority: params.priority,
+    status: 'pending_owner' as VerificationRequestStatus,
+    resolution_note: '',
+  });
 
-    await logPartnerActivity({
-      ownerUid: params.ownerUid,
-      authorizedEmails: params.authorizedEmails,
-      actorName: params.actorName,
-      action: `Requested ${params.assignedTo}: ${sanitizeString(params.title, 100)}`,
-      targetPlatform: params.account.platform,
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
-  }
+  if (error) throw new Error(error.message);
+
+  await logPartnerActivity({
+    ownerUid: params.ownerUid,
+    actorName: params.actorName,
+    action: `Requested ${params.assignedTo}: ${sanitizeString(params.title, 100)}`,
+    targetPlatform: params.account.platform,
+  });
 }
 
 export async function updateVerificationRequestStatus(params: {
@@ -651,30 +742,29 @@ export async function updateVerificationRequestStatus(params: {
   actorName: string;
   ownerUid: string;
 }): Promise<void> {
-  const path = `partner_workspaces/${PARTNER_WORKSPACE_ID}/verification_requests/${params.request.id}`;
-  try {
-    await updateDoc(
-      doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'verification_requests', params.request.id),
-      {
-        status: params.status,
-        resolutionNote: sanitizeString(params.resolutionNote, LIMITS.RESOLUTION_MAX),
-        updatedAt: serverTimestamp(),
-      }
-    );
+  const supabase = getSupabaseClient();
 
-    await logPartnerActivity({
-      ownerUid: params.ownerUid,
-      authorizedEmails: params.request.authorizedEmails,
-      actorName: params.actorName,
-      action:
-        params.status === 'completed'
-          ? `Completed verification: ${params.request.title}`
-          : `Updated request status to ${params.status.replace('_', ' ')}`,
-      targetPlatform: params.request.platformName,
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, path);
-  }
+  const { error } = await supabase
+    .from('verification_requests')
+    .update({
+      status: params.status,
+      resolution_note: sanitizeString(params.resolutionNote, LIMITS.RESOLUTION_MAX),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', params.request.id)
+    .eq('workspace_id', PARTNER_WORKSPACE_ID);
+
+  if (error) throw new Error(error.message);
+
+  await logPartnerActivity({
+    ownerUid: params.ownerUid,
+    actorName: params.actorName,
+    action:
+      params.status === 'completed'
+        ? `Completed verification: ${params.request.title}`
+        : `Updated request status to ${params.status.replace('_', ' ')}`,
+    targetPlatform: params.request.platformName,
+  });
 }
 
 export async function updateWorkspaceAuthorizedEmails(params: {
@@ -684,49 +774,25 @@ export async function updateWorkspaceAuthorizedEmails(params: {
   actorName: string;
   ownerUid: string;
 }): Promise<void> {
-  const cleanEmails = sanitizeEmailList(params.newEmails);
+  const supabase = getSupabaseClient();
+  const cleanEmails = sanitizeEmailList(params.newEmails, params.workspace.ownerEmail);
   const cleanRoster = sanitizeStringArray(params.teamRoster, LIMITS.ARRAY_MAX);
-  const wsPath = `partner_workspaces/${PARTNER_WORKSPACE_ID}`;
 
-  try {
-    const batch = writeBatch(db);
-    batch.update(doc(db, 'partner_workspaces', PARTNER_WORKSPACE_ID), {
-      authorizedEmails: cleanEmails,
-      teamRoster: cleanRoster,
-      updatedAt: serverTimestamp(),
-    });
+  const { error } = await supabase
+    .from('partner_workspaces')
+    .update({
+      authorized_emails: cleanEmails,
+      team_roster: cleanRoster,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', PARTNER_WORKSPACE_ID);
 
-    // Atomically sync authorizedEmails on accounts & verification_requests so new partners see all records immediately
-    const accSnap = await getDocs(
-      collection(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'accounts')
-    );
-    accSnap.forEach((d) => {
-      batch.update(d.ref, {
-        authorizedEmails: cleanEmails,
-        updatedAt: serverTimestamp(),
-      });
-    });
+  if (error) throw new Error(error.message);
 
-    const reqSnap = await getDocs(
-      collection(db, 'partner_workspaces', PARTNER_WORKSPACE_ID, 'verification_requests')
-    );
-    reqSnap.forEach((d) => {
-      batch.update(d.ref, {
-        authorizedEmails: cleanEmails,
-        updatedAt: serverTimestamp(),
-      });
-    });
-
-    await batch.commit();
-
-    await logPartnerActivity({
-      ownerUid: params.ownerUid,
-      authorizedEmails: cleanEmails,
-      actorName: params.actorName,
-      action: `Updated authorized partner access list (${cleanEmails.length} emails)`,
-      targetPlatform: 'Team Access',
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, wsPath);
-  }
+  await logPartnerActivity({
+    ownerUid: params.ownerUid,
+    actorName: params.actorName,
+    action: `Updated authorized team seats (${cleanEmails.length} emails)`,
+    targetPlatform: 'Team Access',
+  });
 }

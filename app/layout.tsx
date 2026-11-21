@@ -1,28 +1,41 @@
 import type { Metadata, Viewport } from 'next';
+import { Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 
+const plusJakartaSans = Plus_Jakarta_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800'],
+  variable: '--font-partner-sans',
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-partner-mono',
+});
+
 export const metadata: Metadata = {
-  title: 'GateDesk — Self-Storage Operations & Branded Tenant App',
+  title: 'CreatorDesk Pro — Social Commerce & Team Access Workspace',
   description:
-    'Never miss a tenant again. Missed-call alerts, help requests, referral tracking, and branded Tenant App. Powered by Retch VisionAI Solution.',
-  applicationName: 'GateDesk',
+    'Team subscription workspace for US seller verification, delegated account access, creative editing, and social publishing.',
+  applicationName: 'CreatorDesk Pro',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'GateDesk',
+    title: 'CreatorDesk Pro',
   },
   openGraph: {
-    title: 'GateDesk — Never Miss a Storage Tenant Again',
+    title: 'CreatorDesk Pro — Social Commerce & Team Access Workspace',
     description:
-      'Turn missed calls into booked self-storage units, automate renter referrals, and give tenants their own branded app. Powered by Retch VisionAI Solution.',
+      'Unified team workspace for US seller verification, delegated account access, creative editing, and social publishing.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'GateDesk — Self-Storage Operations & Tenant App',
+    title: 'CreatorDesk Pro — Social Commerce & Team Access Workspace',
     description:
-      'Never miss a tenant again. Missed-call alerts, help requests, and branded Tenant App for independent storage owners.',
+      'Team subscription workspace for US seller verification, delegated account access, creative editing, and social publishing.',
   },
 };
 
@@ -39,8 +52,15 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className="antialiased bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100" suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${plusJakartaSans.variable} ${jetBrainsMono.variable}`}
+      suppressHydrationWarning
+    >
+      <body
+        className="font-sans antialiased bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+        suppressHydrationWarning
+      >
         {children}
       </body>
     </html>

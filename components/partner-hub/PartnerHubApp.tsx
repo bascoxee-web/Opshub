@@ -2,15 +2,14 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth, partnerSignOut, testFirestoreConnection } from '@/lib/firebase';
+import { User } from '@supabase/supabase-js';
+import { getSupabaseClient, isSupabaseConfigured, supabaseSignOut } from '@/lib/supabase';
 import {
   createPartnerAccount,
   createVerificationRequest,
   deletePartnerAccount,
   ensureWorkspaceInitialized,
-  formatFirestoreTimestamp,
-  isBootstrapAdminEmail,
+  formatWorkspaceTimestamp,
   PLATFORM_PRESETS,
   PlatformPreset,
   sanitizeHttpsUrl,
@@ -141,13 +140,21 @@ export const PartnerHubApp: React.FC = () => {
     }, 3200);
   };
 
-  // Boot connection validation + Auth observer
+  // Boot Supabase Auth observer
   useEffect(() => {
-    testFirestoreConnection();
-    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
+    if (!isSupabaseConfigured) {
+      return;
+    }
+
+    const supabase = getSupabaseClient();
+    let mounted = true;
+
+    const applySessionUser = (nextUser: User | null) => {
+      if (!mounted) return;
+      setUser(nextUser);
       setAuthReady(true);
-      if (!firebaseUser || !firebaseUser.email || !firebaseUser.emailVerified) {
+
+      if (!nextUser || !nextUser.email || !nextUser.email_confirmed_at) {
         setWorkspace(null);
         setAccounts([]);
         setRequests([]);
@@ -155,21 +162,26 @@ export const PartnerHubApp: React.FC = () => {
         setUnauthorizedEmail(null);
         setRuntimeError(null);
         setLoadingData(false);
-        return;
       }
+    };
 
-      if (isBootstrapAdminEmail(firebaseUser.email)) {
-        setActingAs('Ops Manager');
-      } else {
-        setActingAs('Account Owner');
-      }
+    void supabase.auth.getSession().then(({ data }) => {
+      applySessionUser(data.session?.user ?? null);
     });
-    return () => unsub();
+
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      applySessionUser(session?.user ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      authSub.subscription.unsubscribe();
+    };
   }, []);
 
-  // Firestore Initialization + Live Subscriptions once verified
+  // Supabase Workspace Initialization + Live Realtime Subscriptions once verified
   useEffect(() => {
-    if (!authReady || !user || !user.email || !user.emailVerified) {
+    if (!isSupabaseConfigured || !authReady || !user || !user.email || !user.email_confirmed_at) {
       return;
     }
 
@@ -193,7 +205,7 @@ export const PartnerHubApp: React.FC = () => {
 
         const normalizedEmail = (user.email || '').trim().toLowerCase();
         const isAllowed =
-          isBootstrapAdminEmail(normalizedEmail) ||
+          ws.ownerUid === user.id ||
           (ws.authorizedEmails || []).map((e) => e.toLowerCase()).includes(normalizedEmail);
 
         if (!isAllowed) {
@@ -203,7 +215,9 @@ export const PartnerHubApp: React.FC = () => {
         }
 
         setWorkspace(ws);
-        unsubscribe = subscribePartnerHub(normalizedEmail, {
+        setActingAs(ws.ownerUid === user.id ? 'Ops Manager' : 'Account Owner');
+
+        unsubscribe = subscribePartnerHub({
           onWorkspace: (nextWs) => {
             setWorkspace(nextWs);
             setLoadingData(false);
@@ -215,7 +229,7 @@ export const PartnerHubApp: React.FC = () => {
           onRequests: (nextRequests) => setRequests(nextRequests),
           onLogs: (nextLogs) => setLogs(nextLogs),
           onError: (err) => {
-            if (err.message.toLowerCase().includes('permission')) {
+            if (err.message.toLowerCase().includes('permission') || err.message.toLowerCase().includes('row-level security')) {
               setUnauthorizedEmail(user.email || 'Unknown email');
             } else {
               setRuntimeError(err.message);
@@ -226,7 +240,7 @@ export const PartnerHubApp: React.FC = () => {
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.toLowerCase().includes('permission')) {
+        if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('row-level security')) {
           setUnauthorizedEmail(user.email || 'Unknown email');
         } else {
           setRuntimeError(msg);
@@ -235,7 +249,7 @@ export const PartnerHubApp: React.FC = () => {
       }
     };
 
-    bootWorkspace();
+    void bootWorkspace();
 
     return () => {
       cancelled = true;
@@ -243,7 +257,7 @@ export const PartnerHubApp: React.FC = () => {
     };
   }, [authReady, user]);
 
-  const isAdmin = isBootstrapAdminEmail(user?.email);
+  const isAdmin = Boolean(workspace && user && workspace.ownerUid === user.id);
 
   // Derived collections
   const ownerAccounts = useMemo(
@@ -269,8 +283,7 @@ export const PartnerHubApp: React.FC = () => {
     setAddingPresetId(preset.id);
     try {
       await createPartnerAccount({
-        ownerUid: user.uid,
-        authorizedEmails: workspace.authorizedEmails,
+        ownerUid: user.id,
         platform: preset.platform,
         category: preset.category,
         responsibility: preset.responsibility,
@@ -322,7 +335,7 @@ export const PartnerHubApp: React.FC = () => {
   const openRequestsCount = pendingOwnerRequests.length;
 
   const shareableHubUrl =
-    typeof window !== 'undefined' ? `${window.location.origin}/partner-hub` : '/partner-hub';
+    typeof window !== 'undefined' ? window.location.origin : '/';
 
   const handleCopyWorkspaceLink = async () => {
     try {
@@ -331,16 +344,26 @@ export const PartnerHubApp: React.FC = () => {
       showToast('Workspace link copied — share it with your team.');
       setTimeout(() => setCopiedLink(false), 2500);
     } catch {
-      showToast('Copy this link from your browser address bar: /partner-hub');
+      showToast('Copy this link from your browser address bar.');
     }
   };
 
   const handleRefreshAuth = async () => {
-    if (auth.currentUser) {
-      await auth.currentUser.reload();
-      setUser({ ...auth.currentUser } as User);
+    if (!isSupabaseConfigured) return;
+    const supabase = getSupabaseClient();
+    const { data } = await supabase.auth.refreshSession();
+    if (data.session?.user) {
+      setUser(data.session.user);
+    } else {
+      const { data: userRes } = await supabase.auth.getUser();
+      setUser(userRes.user ?? null);
     }
   };
+
+  // Missing Supabase config -> show setup guide immediately
+  if (!isSupabaseConfigured) {
+    return <PartnerAuthGate onRefreshAuth={handleRefreshAuth} />;
+  }
 
   // Loading auth state
   if (!authReady) {
@@ -358,7 +381,7 @@ export const PartnerHubApp: React.FC = () => {
     return <PartnerAuthGate onRefreshAuth={handleRefreshAuth} />;
   }
 
-  if (!user.emailVerified) {
+  if (!user.email_confirmed_at) {
     return <PartnerAuthGate unverifiedUser={user} onRefreshAuth={handleRefreshAuth} />;
   }
 
@@ -413,7 +436,7 @@ export const PartnerHubApp: React.FC = () => {
         newEmails: nextEmails,
         teamRoster: workspace.teamRoster,
         actorName: actingAs,
-        ownerUid: user.uid,
+        ownerUid: user.id,
       });
       setNewPartnerEmail('');
       showToast('Team member email authorized and synced to all accounts.');
@@ -426,7 +449,7 @@ export const PartnerHubApp: React.FC = () => {
 
   const handleRemoveAuthorizedEmail = async (emailToRemove: string) => {
     if (!workspace || !user) return;
-    if (isBootstrapAdminEmail(emailToRemove)) return;
+    if (emailToRemove.toLowerCase() === workspace.ownerEmail.toLowerCase()) return;
     setSavingMembers(true);
     try {
       const nextEmails = workspace.authorizedEmails.filter((e) => e !== emailToRemove);
@@ -435,7 +458,7 @@ export const PartnerHubApp: React.FC = () => {
         newEmails: nextEmails,
         teamRoster: workspace.teamRoster,
         actorName: actingAs,
-        ownerUid: user.uid,
+        ownerUid: user.id,
       });
       showToast(`Removed ${emailToRemove} from authorized seats.`);
     } catch (err) {
@@ -526,7 +549,7 @@ export const PartnerHubApp: React.FC = () => {
             <div className="flex items-center justify-between gap-2">
               {isAdmin && (
                 <Link
-                  href="/"
+                  href="/gatedesk"
                   className="text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
                 >
                   GateDesk
@@ -534,7 +557,7 @@ export const PartnerHubApp: React.FC = () => {
               )}
               <button
                 type="button"
-                onClick={() => partnerSignOut()}
+                onClick={() => void supabaseSignOut()}
                 className="inline-flex items-center gap-1.5 text-slate-500 hover:text-rose-600 dark:hover:text-rose-400 font-medium transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -614,7 +637,7 @@ export const PartnerHubApp: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => partnerSignOut()}
+                onClick={() => void supabaseSignOut()}
                 className="w-full py-2 text-xs font-medium text-rose-600 dark:text-rose-400 flex items-center justify-center gap-1.5"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -845,7 +868,7 @@ export const PartnerHubApp: React.FC = () => {
                                   status: 'completed',
                                   resolutionNote: `Verified and completed by ${actingAs}`,
                                   actorName: actingAs,
-                                  ownerUid: user.uid,
+                                  ownerUid: user.id,
                                 });
                                 const matchedAcc = accounts.find((a) => a.id === req.accountId);
                                 if (matchedAcc && matchedAcc.status !== 'connected') {
@@ -856,7 +879,7 @@ export const PartnerHubApp: React.FC = () => {
                                       delegatedAccessStatus: 'team_access_granted',
                                     },
                                     actingAs,
-                                    user.uid
+                                    user.id
                                   );
                                 }
                                 showToast(`Marked "${req.platformName}" verification complete.`);
@@ -1272,7 +1295,7 @@ export const PartnerHubApp: React.FC = () => {
                             <span>From {req.requestedBy}</span>
                             <span aria-hidden="true">·</span>
                             <span className="font-mono tabular-nums">
-                              {formatFirestoreTimestamp(req.createdAt)}
+                              {formatWorkspaceTimestamp(req.createdAt)}
                             </span>
                           </div>
 
@@ -1316,7 +1339,7 @@ export const PartnerHubApp: React.FC = () => {
                                     status: 'completed',
                                     resolutionNote: `Completed by ${actingAs}`,
                                     actorName: actingAs,
-                                    ownerUid: user.uid,
+                                    ownerUid: user.id,
                                   });
                                   showToast('Verification request marked complete.');
                                 }}
@@ -1409,7 +1432,8 @@ export const PartnerHubApp: React.FC = () => {
 
                 <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
                   {(workspace?.authorizedEmails || []).map((emailItem) => {
-                    const isPrimary = isBootstrapAdminEmail(emailItem);
+                    const isPrimary =
+                      emailItem.toLowerCase() === (workspace?.ownerEmail || '').toLowerCase();
                     return (
                       <div
                         key={emailItem}
@@ -1486,7 +1510,7 @@ export const PartnerHubApp: React.FC = () => {
                           — {log.action}
                         </div>
                         <div className="text-slate-400 font-mono tabular-nums shrink-0">
-                          {log.targetPlatform} · {formatFirestoreTimestamp(log.createdAt)}
+                          {log.targetPlatform} · {formatWorkspaceTimestamp(log.createdAt)}
                         </div>
                       </div>
                     ))}
@@ -1504,20 +1528,20 @@ export const PartnerHubApp: React.FC = () => {
           key={selectedAccount.id}
           account={selectedAccount}
           actingAs={actingAs}
-          canDelete={isAdmin || selectedAccount.ownerUid === user.uid}
+          canDelete={isAdmin || selectedAccount.ownerUid === user.id}
           onClose={() => setSelectedAccountId(null)}
           onSave={async (updates, summary) => {
             await updatePartnerAccount(
               selectedAccount,
               updates,
               actingAs,
-              user.uid,
+              user.id,
               summary
             );
             showToast(`Saved updates for ${selectedAccount.platform}.`);
           }}
           onDelete={async () => {
-            await deletePartnerAccount(selectedAccount, actingAs, user.uid);
+            await deletePartnerAccount(selectedAccount, actingAs, user.id);
             showToast(`Removed ${selectedAccount.platform}.`);
           }}
           onOpenRequestModal={() => {
@@ -1535,8 +1559,7 @@ export const PartnerHubApp: React.FC = () => {
           onCreate={async (data) => {
             await createPartnerAccount({
               ...data,
-              ownerUid: user.uid,
-              authorizedEmails: workspace.authorizedEmails,
+              ownerUid: user.id,
               actorName: actingAs,
             });
             showToast(`Added ${data.platform} to CreatorDesk Pro.`);
@@ -1557,8 +1580,7 @@ export const PartnerHubApp: React.FC = () => {
           onCreate={async (data) => {
             await createVerificationRequest({
               ...data,
-              ownerUid: user.uid,
-              authorizedEmails: workspace.authorizedEmails,
+              ownerUid: user.id,
               actorName: actingAs,
             });
             showToast(`Sent verification request to ${data.assignedTo}.`);

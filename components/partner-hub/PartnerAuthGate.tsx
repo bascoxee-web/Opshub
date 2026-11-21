@@ -1,15 +1,16 @@
 'use client';
 
 import React, { useState } from 'react';
-import { User } from 'firebase/auth';
+import { User } from '@supabase/supabase-js';
 import {
-  partnerEmailSignIn,
-  partnerEmailSignUp,
-  partnerGoogleSignIn,
-  partnerResendVerification,
-  partnerSendPasswordReset,
-  partnerSignOut,
-} from '@/lib/firebase';
+  isSupabaseConfigured,
+  supabaseEmailSignIn,
+  supabaseEmailSignUp,
+  supabaseGoogleSignIn,
+  supabaseResendVerification,
+  supabaseSendPasswordReset,
+  supabaseSignOut,
+} from '@/lib/supabase';
 import {
   ShieldCheck,
   Lock,
@@ -20,6 +21,7 @@ import {
   LogOut,
   AlertCircle,
   KeyRound,
+  Database,
 } from 'lucide-react';
 
 interface PartnerAuthGateProps {
@@ -41,22 +43,84 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
 
+  // Screen 0: Supabase environment variables not configured yet
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between">
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="max-w-xl w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-8 space-y-6">
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-teal-700 dark:text-teal-400">
+                CreatorDesk Pro · Supabase Connection Setup
+              </p>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+                Connect your Supabase project to activate login
+              </h1>
+              <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                CreatorDesk Pro is wired for Supabase Auth, Postgres Row Level Security, and Realtime sync. Complete these 3 steps once to go live on your Cloudflare domain:
+              </p>
+            </div>
+
+            <div className="divide-y divide-slate-200 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden text-sm">
+              <div className="p-4 space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-white">
+                  1. Add environment variables
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Set <code className="font-mono text-teal-700 dark:text-teal-400">NEXT_PUBLIC_SUPABASE_URL</code> and{' '}
+                  <code className="font-mono text-teal-700 dark:text-teal-400">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in your hosting Environment Variables (or AI Studio Secrets) from Supabase Dashboard → Project Settings → API.
+                </p>
+              </div>
+              <div className="p-4 space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-white">
+                  2. Run the database schema script
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  Open Supabase Dashboard → SQL Editor and run <code className="font-mono text-slate-900 dark:text-slate-200">supabase/schema.sql</code> to create your tables, Row Level Security policies, and Realtime channels.
+                </p>
+              </div>
+              <div className="p-4 space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-white">
+                  3. Add your Cloudflare domain to Auth Redirect URLs
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                  In Supabase Dashboard → Authentication → URL Configuration, set Site URL to your domain (e.g. <span className="font-mono">https://hub.yourdomain.com</span>) and add <span className="font-mono">https://hub.yourdomain.com/**</span> to Redirect URLs.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="inline-flex items-center gap-1.5">
+                <Database className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                <span>Waiting for Supabase environment variables</span>
+              </span>
+              <a
+                href="/gatedesk"
+                className="font-semibold text-slate-700 dark:text-slate-300 hover:text-teal-600 dark:hover:text-teal-400"
+              >
+                Open GateDesk →
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <footer className="py-4 px-6 text-center text-xs text-slate-400">
+          CreatorDesk Pro · Social Commerce, Editing &amp; Team Access Platform
+        </footer>
+      </div>
+    );
+  }
+
   const handleGoogleLogin = async () => {
     setErrorMsg('');
     setInfoMsg('');
     setLoading(true);
     try {
-      await partnerGoogleSignIn();
+      await supabaseGoogleSignIn();
     } catch (err: unknown) {
-      const code = (err as { code?: string })?.code || '';
-      if (code === 'auth/popup-closed-by-user') {
-        setErrorMsg('Sign-in popup was closed before finishing. Please try again.');
-      } else {
-        setErrorMsg(
-          err instanceof Error ? err.message : 'Unable to sign in with Google right now.'
-        );
-      }
-    } finally {
+      setErrorMsg(
+        err instanceof Error ? err.message : 'Unable to start Google sign-in right now.'
+      );
       setLoading(false);
     }
   };
@@ -74,7 +138,7 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
     setLoading(true);
     try {
       if (authTab === 'reset') {
-        await partnerSendPasswordReset(email);
+        await supabaseSendPasswordReset(email);
         setInfoMsg('Password reset link sent. Check your inbox and spam folder.');
         setAuthTab('signin');
       } else if (authTab === 'signup') {
@@ -83,34 +147,31 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
           setLoading(false);
           return;
         }
-        await partnerEmailSignUp(email, password, displayName);
-        setInfoMsg('Account created. Please check your inbox to verify your email.');
+        const res = await supabaseEmailSignUp(email, password, displayName);
+        if (res.needsEmailConfirmation) {
+          setInfoMsg('Account created. Check your inbox to confirm your email, then sign in.');
+          setAuthTab('signin');
+        }
       } else {
-        await partnerEmailSignIn(email, password);
+        await supabaseEmailSignIn(email, password);
       }
     } catch (err: unknown) {
-      const code = (err as { code?: string })?.code || '';
-      if (code === 'auth/operation-not-allowed') {
-        setErrorMsg(
-          'Email & Password sign-in is not turned on in Firebase Console yet. Click "Continue with Google" below for instant access, or enable Email/Password under Firebase Console > Authentication > Sign-in method.'
-        );
-      } else if (
-        code === 'auth/invalid-credential' ||
-        code === 'auth/wrong-password' ||
-        code === 'auth/user-not-found'
-      ) {
+      const msg = err instanceof Error ? err.message : 'Sign-in failed. Please try again.';
+      if (msg.toLowerCase().includes('invalid login credentials')) {
         setErrorMsg('Incorrect email or password. Double-check your credentials or create an account.');
-      } else if (code === 'auth/email-already-in-use') {
+      } else if (msg.toLowerCase().includes('email not confirmed')) {
+        setErrorMsg('Please confirm your email address using the link sent to your inbox before signing in.');
+      } else if (msg.toLowerCase().includes('user already registered')) {
         setErrorMsg('An account already exists with this email. Switch to Sign In.');
       } else {
-        setErrorMsg(err instanceof Error ? err.message : 'Sign-in failed. Please try again.');
+        setErrorMsg(msg);
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // Screen A: Signed in with Email/Password, awaiting email verification
+  // Screen A: Signed in, awaiting email verification
   if (unverifiedUser) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6">
@@ -123,7 +184,7 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
               Verify your email to enter
             </h1>
             <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-              We sent a verification link to{' '}
+              We sent a confirmation link to{' '}
               <span className="font-semibold text-slate-900 dark:text-white">
                 {unverifiedUser.email}
               </span>
@@ -164,25 +225,27 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
               <span>I have verified my email</span>
             </button>
 
-            <button
-              type="button"
-              onClick={async () => {
-                setErrorMsg('');
-                try {
-                  await partnerResendVerification();
-                  setInfoMsg('Verification email resent. Please check your inbox.');
-                } catch {
-                  setErrorMsg('Please wait a moment before requesting another email.');
-                }
-              }}
-              className="w-full py-2 px-4 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-medium rounded-lg transition-colors"
-            >
-              Resend verification email
-            </button>
+            {unverifiedUser.email && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setErrorMsg('');
+                  try {
+                    await supabaseResendVerification(unverifiedUser.email || '');
+                    setInfoMsg('Confirmation email resent. Please check your inbox.');
+                  } catch {
+                    setErrorMsg('Please wait a moment before requesting another email.');
+                  }
+                }}
+                className="w-full py-2 px-4 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-medium rounded-lg transition-colors"
+              >
+                Resend confirmation email
+              </button>
+            )}
 
             <button
               type="button"
-              onClick={() => partnerSignOut()}
+              onClick={() => void supabaseSignOut()}
               className="w-full py-2 px-4 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 text-xs font-medium flex items-center justify-center gap-1.5"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -194,7 +257,7 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
     );
   }
 
-  // Screen B: Signed in & verified, but email is not yet on the authorized partner list
+  // Screen B: Signed in & verified, but email is not yet on the authorized team seat list
   if (unauthorizedEmail) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-6">
@@ -222,14 +285,14 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
           <div className="flex items-center gap-3 pt-1">
             <button
               type="button"
-              onClick={() => onRefreshAuth()}
+              onClick={() => void onRefreshAuth()}
               className="flex-1 py-2.5 px-4 bg-slate-900 dark:bg-teal-600 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 dark:hover:bg-teal-500 transition-colors"
             >
               Check Access Again
             </button>
             <button
               type="button"
-              onClick={() => partnerSignOut()}
+              onClick={() => void supabaseSignOut()}
               className="py-2.5 px-4 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
             >
               Sign Out
@@ -240,7 +303,7 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
     );
   }
 
-  // Screen C: Main Partner Hub Login Portal
+  // Screen C: Main CreatorDesk Pro Login Portal
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between">
       <div className="flex-1 flex items-center justify-center p-6">
@@ -297,25 +360,8 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
                 {authTab === 'reset' && 'Reset your password'}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Sign in with your shared team subscription email or your authorized personal login.
+                Sign in with your shared team subscription email &amp; password or your authorized seat login.
               </p>
-            </div>
-
-            {/* Instant Google Sign-In */}
-            <button
-              type="button"
-              onClick={handleGoogleLogin}
-              disabled={loading}
-              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-950 font-semibold text-sm rounded-lg flex items-center justify-center gap-2.5 transition-colors disabled:opacity-60"
-            >
-              <KeyRound className="w-4 h-4 text-teal-400 dark:text-teal-600" />
-              <span>Continue with Google (Instant Sign-In)</span>
-            </button>
-
-            <div className="relative flex items-center">
-              <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
-              <span className="px-3 text-xs text-slate-400">or sign in with email &amp; password</span>
-              <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
             </div>
 
             {/* Segmented Mode Switcher */}
@@ -458,6 +504,22 @@ export const PartnerAuthGate: React.FC<PartnerAuthGateProps> = ({
                 </button>
               )}
             </form>
+
+            <div className="relative flex items-center">
+              <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
+              <span className="px-3 text-xs text-slate-400">or</span>
+              <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGoogleLogin}
+              disabled={loading}
+              className="w-full py-2.5 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-950 font-semibold text-sm rounded-lg flex items-center justify-center gap-2.5 transition-colors disabled:opacity-60"
+            >
+              <KeyRound className="w-4 h-4 text-teal-400 dark:text-teal-600" />
+              <span>Continue with Google</span>
+            </button>
           </div>
         </div>
       </div>

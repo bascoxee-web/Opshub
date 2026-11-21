@@ -303,7 +303,7 @@ export const BusinessHubView: React.FC = () => {
 
             <div className="flex flex-wrap items-center gap-3">
               <Link
-                href="/partner-hub"
+                href="/"
                 className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-white flex items-center gap-2 transition-colors whitespace-nowrap"
               >
                 <Users className="w-4 h-4 text-teal-400" />

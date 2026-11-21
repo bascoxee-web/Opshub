@@ -53,7 +53,7 @@ export const DemoBanner: React.FC = () => {
         )}
 
         <Link
-          href="/partner-hub"
+          href="/"
           className="inline-flex items-center gap-1 px-2 py-0.5 text-teal-300 hover:text-white hover:bg-slate-800 rounded transition-colors font-medium whitespace-nowrap"
           title="Open CreatorDesk Pro — Social Selling, Editing & Team Access Hub"
         >
